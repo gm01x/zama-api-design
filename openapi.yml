@@ -1,0 +1,1296 @@
+openapi: 3.0.3
+info:
+  title: Zama Jobs API
+  description: |
+    A REST API for submitting long-running, asynchronous jobs with blockchain confirmation and optional confidential computing support.
+
+    ## Overview
+    The Zama Jobs API allows developers to submit computational jobs that are processed asynchronously and have their final confirmation recorded on an fhEVM-compatible blockchain. Built with Node.js for optimal async performance.
+
+    ## Key Features
+    - Asynchronous job submission and status tracking (Node.js + Redis queues)
+    - Content hash-based deduplication and idempotency
+    - Kong Gateway integration with advanced rate limiting
+    - Blockchain-based job confirmation with private ERC20 payments
+    - Optional FHE (Fully Homomorphic Encryption) support for confidential computing
+    - Comprehensive error handling with detailed error codes
+    - Real-time metering and usage-based billing
+
+    ## Architecture
+    - **Backend**: Node.js with clustering for high concurrency
+    - **Queue**: Redis-based job queues with priority handling
+    - **Gateway**: Kong API Gateway with custom Lua plugins
+    - **Database**: PostgreSQL for job metadata, Redis for caching
+    - **Blockchain**: fhEVM with private smart contracts
+    - **FHE**: Optional confidential computing via Zama Gateway
+    - **k8s**: Kubernetes deployment with versioning strategy
+
+    ## Authentication
+    This API uses OAuth 2.0 with JWT Bearer tokens. Include your access token in the Authorization header:
+
+    ```
+    Authorization: Bearer <your_jwt_token>
+    ```
+
+    ## Rate Limiting
+    - Kong-based distributed rate limiting with Redis backend
+    - Default: 100 requests/minute, 10,000 requests/hour
+    - Token bucket algorithm with burst handling
+    - Rate limit headers included in all responses
+
+    ## Confidential Computing (FHE)
+    For sensitive workloads, enable FHE mode to keep your data encrypted throughout processing:
+    - Data remains encrypted during computation
+    - Results delivered via secure re-encryption
+    - Only the original submitter can decrypt results
+  version: 1.0.0
+  contact:
+    name: Zama Platform Team (DEMO PURPOSE ONLY)
+    email: greg.meszaros@zama.io
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.zama.io/v1
+    description: Production server
+  - url: https://staging-api.zama.io/v1
+    description: Staging server
+  - url: https://dev-api.zama.io/v1
+    description: Development server
+
+paths:
+  /jobs:
+    post:
+      summary: Submit a new job
+      description: |
+        Submit a new asynchronous job for processing. The job will be queued and processed in the background.
+
+        ## Idempotency
+        To make requests idempotent, include an `Idempotency-Key` header with a unique value. The same key will return the cached response for 24 hours.
+
+        ## Job Types
+        Supported job types and their approximate processing times:
+        - `compute`: CPU-intensive computations (2-5 minutes)
+        - `ml_training`: Machine learning model training (10-30 minutes)
+        - `data_processing`: Large dataset processing (5-15 minutes)
+        - `blockchain_interaction`: Smart contract interactions (1-3 minutes)
+        - `fhe_compute`: Confidential FHE computations (10-20 minutes, encrypted throughout)
+        - `fhe_ml_training`: Confidential ML training (30-60 minutes, encrypted throughout)
+
+        ## FHE Mode
+        Set `useFHE: true` to enable confidential computing:
+        - **Client-side encryption**: Use TFHE-rs library to encrypt data before submission
+        - **Zero-knowledge processing**: Data remains encrypted throughout processing
+        - **Secure result delivery**: Results delivered via Zama Gateway re-encryption
+        - **Privacy**: Only the original submitter can decrypt results
+        - **Additional fee**: FHE processing surcharge applies
+
+        ## FHE Submission Format
+        For FHE jobs (`useFHE: true`), modify your payload structure:
+        ```json
+        {
+          "type": "fhe_compute",
+          "payload": {
+            "algorithm": "encrypted_statistical_analysis",
+            "encrypted_data_url": "https://storage.example.com/encrypted_data.enc",
+            "client_public_key": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+          },
+          "useFHE": true
+        }
+        ```
+      operationId: submitJob
+      tags:
+        - Jobs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: Unique key for idempotent requests
+          schema:
+            type: string
+            format: uuid
+          example: "123e4567-e89b-12d3-a456-426614174000"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobSubmission'
+            examples:
+              compute_job:
+                summary: CPU-intensive computation job
+                value:
+                  type: "compute"
+                  payload:
+                    algorithm: "prime_factorization"
+                    input:
+                      number: 104729
+                    parameters:
+                      timeout: 300
+                  priority: "normal"
+                  useFHE: false
+              ml_training_job:
+                summary: Machine learning training job
+                value:
+                  type: "ml_training"
+                  payload:
+                    model_type: "neural_network"
+                    training_data_url: "https://example.com/data.csv"
+                    hyperparameters:
+                      epochs: 100
+                      learning_rate: 0.001
+                      batch_size: 32
+                  priority: "high"
+                  useFHE: false
+              fhe_compute_job:
+                summary: Confidential FHE computation job
+                value:
+                  type: "fhe_compute"
+                  payload:
+                    algorithm: "encrypted_statistical_analysis"
+                    encrypted_data_url: "https://storage.example.com/encrypted_data.enc"
+                    client_public_key: "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...\n-----END PUBLIC KEY-----"
+                    parameters:
+                      fhe_scheme: "tfhe"
+                      security_level: 128
+                  priority: "normal"
+                  useFHE: true
+              fhe_ml_job:
+                summary: Confidential FHE ML training job
+                value:
+                  type: "fhe_ml_training"
+                  payload:
+                    model_type: "encrypted_neural_network"
+                    encrypted_training_data_url: "https://storage.example.com/encrypted_training_data.enc"
+                    client_public_key: "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...\n-----END PUBLIC KEY-----"
+                    hyperparameters:
+                      encrypted_epochs: 50
+                    parameters:
+                      enable_encrypted_validation: true
+                      fhe_optimizer: "encrypted_sgd"
+                  priority: "high"
+                  useFHE: true
+      responses:
+        '202':
+          description: Job accepted for processing
+          headers:
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/X-RateLimit-Limit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/X-RateLimit-Remaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/X-RateLimit-Reset'
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobSubmissionResponse'
+              examples:
+                success_response:
+                  summary: Job successfully submitted
+                  value:
+                    job_id: "550e8400-e29b-41d4-a716-446655440000"
+                    status: "PENDING"
+                    created_at: "2024-01-15T10:30:00Z"
+                    estimated_completion: "2024-01-15T10:35:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    get:
+      summary: List jobs for the authenticated tenant
+      description: |
+        Retrieve a paginated list of jobs submitted by the authenticated tenant.
+
+        ## Filtering
+        Jobs can be filtered by status, type, and date range using query parameters.
+      operationId: listJobs
+      tags:
+        - Jobs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          description: Filter by job status
+          schema:
+            type: string
+            enum: [PENDING, PROCESSING, COMPLETED, FAILED]
+          example: "COMPLETED"
+        - name: type
+          in: query
+          description: Filter by job type
+          schema:
+            type: string
+            enum: [compute, ml_training, data_processing, blockchain_interaction]
+          example: "compute"
+        - name: created_after
+          in: query
+          description: Filter jobs created after this timestamp
+          schema:
+            type: string
+            format: date-time
+          example: "2024-01-01T00:00:00Z"
+        - name: created_before
+          in: query
+          description: Filter jobs created before this timestamp
+          schema:
+            type: string
+            format: date-time
+          example: "2024-01-31T23:59:59Z"
+        - name: limit
+          in: query
+          description: Maximum number of jobs to return (max 100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          example: 20
+        - name: offset
+          in: query
+          description: Number of jobs to skip for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          example: 0
+      responses:
+        '200':
+          description: List of jobs retrieved successfully
+          headers:
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/X-RateLimit-Limit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/X-RateLimit-Remaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/X-RateLimit-Reset'
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobListResponse'
+              examples:
+                job_list:
+                  summary: Paginated list of jobs
+                  value:
+                    jobs:
+                      - job_id: "550e8400-e29b-41d4-a716-446655440000"
+                        status: "COMPLETED"
+                        type: "compute"
+                        created_at: "2024-01-15T10:30:00Z"
+                        updated_at: "2024-01-15T10:34:45Z"
+                      - job_id: "550e8400-e29b-41d4-a716-446655440001"
+                        status: "PENDING"
+                        type: "ml_training"
+                        created_at: "2024-01-15T11:00:00Z"
+                        updated_at: "2024-01-15T11:00:00Z"
+                    pagination:
+                      total_count: 45
+                      limit: 20
+                      offset: 0
+                      has_more: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  
+  /jobs/{jobId}/fhe-result:
+    post:
+      summary: Retrieve FHE job result via secure re-encryption
+      description: |
+        Retrieve the result of a completed FHE job (submitted with `useFHE: true`) via secure re-encryption from Zama Gateway.
+
+        ## Prerequisites
+        - Job must be submitted with `useFHE: true` via POST /jobs
+        - Job status must be COMPLETED
+        - Client must possess the private key corresponding to the original public key
+
+        ## Re-encryption Process
+        1. Submit retrieval request with client signature proving ownership
+        2. System verifies submitter identity and job ownership
+        3. Zama Gateway re-encrypts result to client's original public key
+        4. Only client can decrypt the re-encrypted result with their private key
+
+        ## Security Notes
+        - Results remain encrypted during transmission and processing
+        - Only original submitter can retrieve and decrypt results
+        - Re-encryption prevents unauthorized access even by system operators
+      operationId: retrieveFHEResult
+      tags:
+        - Jobs
+        - Confidential Computing
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          description: Unique identifier of the FHE job
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - clientSignature
+                - retrievalNonce
+              properties:
+                clientSignature:
+                  type: string
+                  description: Client signature proving ownership of the job
+                  example: "0x1234567890abcdef..."
+                retrievalNonce:
+                  type: string
+                  description: Unique nonce for this retrieval request
+                  example: "retrieval_nonce_12345"
+      responses:
+        '200':
+          description: FHE result retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - job_id
+                  - status
+                  - reencrypted_result
+                properties:
+                  job_id:
+                    type: string
+                    format: uuid
+                    description: Job identifier
+                    example: "550e8400-e29b-41d4-a716-446655440000"
+                  status:
+                    type: string
+                    enum: [COMPLETED, FAILED]
+                    description: Job status
+                    example: "COMPLETED"
+                  reencrypted_result:
+                    type: object
+                    description: Re-encrypted result data for client decryption
+                    properties:
+                      ciphertext:
+                        type: string
+                        description: Re-encrypted result ciphertext
+                        example: "reencrypted_data_blob_base64"
+                      nonce:
+                        type: string
+                        description: Re-encryption nonce
+                        example: "reencrypt_nonce_base64"
+                  blockchain_confirmation:
+                    $ref: '#/components/schemas/BlockchainConfirmation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '406':
+          description: Not Acceptable - job is not an FHE job or not completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    $ref: '#/components/schemas/Error'
+              examples:
+                not_fhe_job:
+                  summary: Job is not an FHE job
+                  value:
+                    error:
+                      code: "NOT_FHE_JOB"
+                      message: "This endpoint is only available for FHE jobs"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /jobs/{jobId}:
+    get:
+      summary: Get job status and details
+      description: |
+        Retrieve the current status and details of a specific job. This endpoint can be used to poll for job completion.
+
+        ## Polling Strategy
+        For optimal results, use exponential backoff polling:
+        - Start polling every 5 seconds
+        - Increase interval by 1.5x after each check
+        - Maximum interval of 30 seconds
+        - Stop polling when status is COMPLETED or FAILED
+      operationId: getJobStatus
+      tags:
+        - Jobs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          description: Unique identifier of the job
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Job details retrieved successfully
+          headers:
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/X-RateLimit-Limit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/X-RateLimit-Remaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/X-RateLimit-Reset'
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobDetails'
+              examples:
+                pending_job:
+                  summary: Job still pending
+                  value:
+                    job_id: "550e8400-e29b-41d4-a716-446655440000"
+                    status: "PENDING"
+                    created_at: "2024-01-15T10:30:00Z"
+                    updated_at: "2024-01-15T10:30:00Z"
+                    result: null
+                    blockchain_confirmation: null
+                    error: null
+                completed_job:
+                  summary: Job completed successfully
+                  value:
+                    job_id: "550e8400-e29b-41d4-a716-446655440000"
+                    status: "COMPLETED"
+                    created_at: "2024-01-15T10:30:00Z"
+                    updated_at: "2024-01-15T10:34:45Z"
+                    result:
+                      output: 104729
+                      processing_time_ms: 265000
+                    blockchain_confirmation:
+                      transaction_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                      block_number: 18500000
+                      block_timestamp: "2024-01-15T10:35:00Z"
+                      gas_used: 45000
+                    error: null
+                failed_job:
+                  summary: Job failed
+                  value:
+                    job_id: "550e8400-e29b-41d4-a716-446655440000"
+                    status: "FAILED"
+                    created_at: "2024-01-15T10:30:00Z"
+                    updated_at: "2024-01-15T10:32:15Z"
+                    result: null
+                    blockchain_confirmation: null
+                    error:
+                      code: "PROCESSING_TIMEOUT"
+                      message: "Job exceeded maximum processing time of 300 seconds"
+                      details:
+                        timeout_seconds: 300
+                        actual_duration_seconds: 315
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /health:
+    get:
+      summary: Health check endpoint
+      description: |
+        Returns the health status of the API and its dependencies.
+
+        ## Health Check Types
+        - **Liveness**: Basic API responsiveness
+        - **Readiness**: Database connectivity and queue health
+        - **Deep**: Full dependency health including external services
+      operationId: healthCheck
+      tags:
+        - System
+      parameters:
+        - name: type
+          in: query
+          description: Type of health check to perform
+          schema:
+            type: string
+            enum: [liveness, readiness, deep]
+            default: "liveness"
+          example: "readiness"
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheckResponse'
+              examples:
+                healthy:
+                  summary: Service is healthy
+                  value:
+                    status: "healthy"
+                    timestamp: "2024-01-15T10:30:00Z"
+                    version: "1.0.0"
+                    checks:
+                      api: "healthy"
+                      database: "healthy"
+                      queue: "healthy"
+                      blockchain: "healthy"
+        '503':
+          description: Service is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheckResponse'
+              examples:
+                unhealthy:
+                  summary: Service has issues
+                  value:
+                    status: "unhealthy"
+                    timestamp: "2024-01-15T10:30:00Z"
+                    version: "1.0.0"
+                    checks:
+                      api: "healthy"
+                      database: "healthy"
+                      queue: "degraded"
+                      blockchain: "unhealthy"
+
+components:
+  schemas:
+    JobSubmission:
+      type: object
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [compute, ml_training, data_processing, blockchain_interaction, fhe_compute, fhe_ml_training]
+          description: Type of job to execute. FHE types keep data encrypted throughout processing.
+          example: "compute"
+        payload:
+          type: object
+          description: |
+            Job-specific payload data. Structure varies by job type:
+
+            **Regular Jobs**: Standard algorithm input data
+            ```json
+            {
+              "algorithm": "prime_factorization",
+              "input": {"number": 104729},
+              "parameters": {"timeout": 300}
+            }
+            ```
+
+            **FHE Jobs** (useFHE: true): Encrypted data and client keys
+            ```json
+            {
+              "algorithm": "encrypted_statistical_analysis",
+              "encrypted_data_url": "https://storage.example.com/encrypted_data.enc",
+              "client_public_key": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
+              "parameters": {"fhe_scheme": "tfhe", "security_level": 128}
+            }
+            ```
+          example:
+            algorithm: "prime_factorization"
+            input:
+              number: 104729
+            parameters:
+              timeout: 300
+        priority:
+          type: string
+          enum: [low, normal, high, urgent]
+          description: Job processing priority (higher priority jobs are processed first)
+          default: "normal"
+          example: "normal"
+        useFHE:
+          type: boolean
+          description: Enable confidential computing mode. Data remains encrypted during processing.
+          default: false
+          example: false
+        paymentAuthorization:
+          type: string
+          description: Payment authorization signature for private ERC20 token payment (required for non-free jobs)
+          example: "0x1234567890abcdef..."
+        metadata:
+          type: object
+          description: Optional metadata for job tracking and organization
+          additionalProperties:
+            type: string
+          example:
+            project: "research_2024"
+            environment: "production"
+            cost_center: "engineering"
+
+    JobSubmissionResponse:
+      type: object
+      required:
+        - job_id
+        - status
+        - created_at
+        - estimated_completion
+        - content_hash
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the submitted job
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, COMPLETED, FAILED, ENCRYPTED_PENDING]
+          description: Current status of the job. ENCRYPTED_PENDING for FHE jobs awaiting processing.
+          example: "PENDING"
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the job was submitted
+          example: "2024-01-15T10:30:00Z"
+        estimated_completion:
+          type: string
+          format: date-time
+          description: Estimated completion time for the job (longer for FHE jobs)
+          example: "2024-01-15T10:35:00Z"
+        queue_position:
+          type: integer
+          description: Position in processing queue (null if already processing)
+          nullable: true
+          example: 5
+        content_hash:
+          type: string
+          description: SHA-256 hash of job payload for deduplication and integrity verification
+          example: "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef1234567890"
+        payment_locked:
+          type: boolean
+          description: Whether payment has been locked in the smart contract
+          nullable: true
+          example: true
+        processing_fee:
+          type: number
+          format: float
+          description: Processing fee charged for this job (including FHE surcharge if applicable)
+          example: 0.05
+
+    JobDetails:
+      type: object
+      required:
+        - job_id
+        - status
+        - created_at
+        - updated_at
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the job
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, COMPLETED, FAILED]
+          description: Current status of the job
+          example: "COMPLETED"
+        type:
+          type: string
+          enum: [compute, ml_training, data_processing, blockchain_interaction]
+          description: Type of job that was executed
+          example: "compute"
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the job was submitted
+          example: "2024-01-15T10:30:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: Timestamp of the last status update
+          example: "2024-01-15T10:34:45Z"
+        started_at:
+          type: string
+          format: date-time
+          description: Timestamp when job processing started
+          nullable: true
+          example: "2024-01-15T10:30:15Z"
+        completed_at:
+          type: string
+          format: date-time
+          description: Timestamp when job processing completed
+          nullable: true
+          example: "2024-01-15T10:34:45Z"
+        result:
+          type: object
+          description: Job execution results (present only for completed jobs)
+          nullable: true
+          example:
+            output: 104729
+            processing_time_ms: 265000
+            resource_usage:
+              cpu_time_ms: 250000
+              memory_peak_mb: 512
+        blockchain_confirmation:
+          type: object
+          description: Blockchain transaction details (present only for confirmed jobs)
+          nullable: true
+          properties:
+            transaction_hash:
+              type: string
+              description: Hash of the confirmation transaction
+              example: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+            block_number:
+              type: integer
+              description: Block number containing the confirmation transaction
+              example: 18500000
+            block_timestamp:
+              type: string
+              format: date-time
+              description: Timestamp of the block containing the confirmation
+              example: "2024-01-15T10:35:00Z"
+            gas_used:
+              type: integer
+              description: Gas used for the confirmation transaction
+              example: 45000
+            contract_address:
+              type: string
+              description: Address of the smart contract that recorded the confirmation
+              example: "0xabcdef1234567890abcdef1234567890abcdef1234"
+        error:
+          type: object
+          description: Error details (present only for failed jobs)
+          nullable: true
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code
+              example: "PROCESSING_TIMEOUT"
+            message:
+              type: string
+              description: Human-readable error message
+              example: "Job exceeded maximum processing time of 300 seconds"
+            details:
+              type: object
+              description: Additional error context
+              example:
+                timeout_seconds: 300
+                actual_duration_seconds: 315
+        metadata:
+          type: object
+          description: Job metadata provided during submission
+          additionalProperties:
+            type: string
+          example:
+            project: "research_2024"
+            environment: "production"
+
+    JobSummary:
+      type: object
+      required:
+        - job_id
+        - status
+        - type
+        - created_at
+        - updated_at
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the job
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, COMPLETED, FAILED]
+          description: Current status of the job
+          example: "COMPLETED"
+        type:
+          type: string
+          enum: [compute, ml_training, data_processing, blockchain_interaction]
+          description: Type of job that was executed
+          example: "compute"
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the job was submitted
+          example: "2024-01-15T10:30:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: Timestamp of the last status update
+          example: "2024-01-15T10:34:45Z"
+
+    JobListResponse:
+      type: object
+      required:
+        - jobs
+        - pagination
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobSummary'
+          description: List of jobs matching the query parameters
+        pagination:
+          type: object
+          required:
+            - total_count
+            - limit
+            - offset
+            - has_more
+          properties:
+            total_count:
+              type: integer
+              description: Total number of jobs matching the filters
+              example: 45
+            limit:
+              type: integer
+              description: Maximum number of jobs returned in this response
+              example: 20
+            offset:
+              type: integer
+              description: Number of jobs skipped for pagination
+              example: 0
+            has_more:
+              type: boolean
+              description: Whether more jobs are available beyond this page
+              example: true
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code
+          example: "JOB_VALIDATION_FAILED"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Invalid job payload: missing required field 'type'"
+        details:
+          type: object
+          description: Additional error context
+          properties:
+            field:
+              type: string
+              description: Field that caused the validation error
+              example: "type"
+            timestamp:
+              type: string
+              format: date-time
+              description: When the error occurred
+              example: "2024-01-15T10:30:00Z"
+            request_id:
+              type: string
+              description: Unique identifier for the request
+              example: "req_123456789"
+
+    HealthCheckResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+        - version
+        - checks
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          description: Overall health status
+          example: "healthy"
+        timestamp:
+          type: string
+          format: date-time
+          description: When the health check was performed
+          example: "2024-01-15T10:30:00Z"
+        version:
+          type: string
+          description: API version
+          example: "1.0.0"
+        uptime_seconds:
+          type: integer
+          description: Service uptime in seconds
+          example: 86400
+        checks:
+          type: object
+          description: Health status of individual components
+          additionalProperties:
+            type: string
+            enum: [healthy, degraded, unhealthy]
+          example:
+            api: "healthy"
+            database: "healthy"
+            queue: "healthy"
+            blockchain: "healthy"
+
+    FHEJobSubmission:
+      type: object
+      required:
+        - type
+        - encryptedPayload
+        - encryptedMetadata
+      properties:
+        type:
+          type: string
+          enum: [fhe_compute, fhe_ml_training]
+          description: Type of FHE job to execute
+          example: "fhe_compute"
+        encryptedPayload:
+          type: object
+          required:
+            - ciphertext
+            - nonce
+            - clientPublicKey
+          properties:
+            ciphertext:
+              type: string
+              description: Base64-encoded encrypted ciphertext
+              example: "encrypted_data_blob_base64"
+            nonce:
+              type: string
+              description: Base64-encoded encryption nonce
+              example: "random_nonce_base64"
+            clientPublicKey:
+              type: string
+              description: Client's public key for result re-encryption
+              example: "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+        encryptedMetadata:
+          type: object
+          description: Encrypted job metadata and parameters
+          properties:
+            algorithm_type:
+              type: string
+              description: Type of FHE algorithm (encrypted)
+              example: "statistical_analysis"
+            encrypted_parameters:
+              type: string
+              description: Encrypted algorithm parameters
+              example: "encrypted_params_blob"
+        priority:
+          type: string
+          enum: [low, normal, high, urgent]
+          description: Job processing priority
+          default: "normal"
+          example: "normal"
+        paymentAuthorization:
+          type: string
+          description: Payment authorization for FHE processing fees
+          example: "0x1234567890abcdef..."
+
+    FHEJobSubmissionResponse:
+      type: object
+      required:
+        - job_id
+        - status
+        - created_at
+        - estimated_completion
+        - content_hash
+        - processing_fee
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the submitted FHE job
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          type: string
+          enum: [ENCRYPTED_PENDING, PROCESSING, COMPLETED, FAILED]
+          description: Current status of the FHE job
+          example: "ENCRYPTED_PENDING"
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the job was submitted
+          example: "2024-01-15T10:30:00Z"
+        estimated_completion:
+          type: string
+          format: date-time
+          description: Estimated completion time (FHE jobs take longer)
+          example: "2024-01-15T10:50:00Z"
+        content_hash:
+          type: string
+          description: Hash of encrypted payload for deduplication
+          example: "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef1234567890"
+        processing_fee:
+          type: number
+          format: float
+          description: Total processing fee including FHE surcharge
+          example: 0.25
+        payment_locked:
+          type: boolean
+          description: Whether payment has been locked in smart contract
+          example: true
+
+    BlockchainConfirmation:
+      type: object
+      required:
+        - transaction_hash
+        - block_number
+        - block_timestamp
+      properties:
+        transaction_hash:
+          type: string
+          description: Hash of the confirmation transaction
+          example: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+        block_number:
+          type: integer
+          description: Block number containing the confirmation transaction
+          example: 18500000
+        block_timestamp:
+          type: string
+          format: date-time
+          description: Timestamp of the block containing the confirmation
+          example: "2024-01-15T10:35:00Z"
+        gas_used:
+          type: integer
+          description: Gas used for the confirmation transaction
+          example: 45000
+        contract_address:
+          type: string
+          description: Address of the smart contract that recorded the confirmation
+          example: "0xabcdef1234567890abcdef1234567890abcdef1234"
+
+  headers:
+    X-RateLimit-Limit:
+      description: The number of requests allowed in the current period
+      schema:
+        type: integer
+      example: 100
+    X-RateLimit-Remaining:
+      description: The number of requests remaining in the current period
+      schema:
+        type: integer
+      example: 95
+    X-RateLimit-Reset:
+      description: The time when the rate limit period resets (Unix timestamp)
+      schema:
+        type: integer
+      example: 1705317600
+    X-Request-ID:
+      description: Unique identifier for the request
+      schema:
+        type: string
+      example: "req_123456789"
+
+  responses:
+    BadRequest:
+      description: Bad request - invalid input data
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: '#/components/schemas/Error'
+          examples:
+            validation_error:
+              summary: Invalid job payload
+              value:
+                error:
+                  code: "JOB_VALIDATION_FAILED"
+                  message: "Invalid job payload: missing required field 'type'"
+                  details:
+                    field: "type"
+                    timestamp: "2024-01-15T10:30:00Z"
+                    request_id: "req_123456789"
+
+    Unauthorized:
+      description: Unauthorized - invalid or missing authentication
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: '#/components/schemas/Error'
+          examples:
+            invalid_token:
+              summary: Invalid authentication token
+              value:
+                error:
+                  code: "INVALID_TOKEN"
+                  message: "The provided JWT token is invalid or has expired"
+                  details:
+                    timestamp: "2024-01-15T10:30:00Z"
+                    request_id: "req_123456789"
+
+    Forbidden:
+      description: Forbidden - insufficient permissions
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: '#/components/schemas/Error'
+          examples:
+            access_denied:
+              summary: Access to job denied
+              value:
+                error:
+                  code: "ACCESS_DENIED"
+                  message: "You do not have permission to access this job"
+                  details:
+                    timestamp: "2024-01-15T10:30:00Z"
+                    request_id: "req_123456789"
+
+    NotFound:
+      description: Not found - job does not exist
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: '#/components/schemas/Error'
+          examples:
+            job_not_found:
+              summary: Job not found
+              value:
+                error:
+                  code: "JOB_NOT_FOUND"
+                  message: "The specified job does not exist or you do not have permission to access it"
+                  details:
+                    job_id: "550e8400-e29b-41d4-a716-446655440000"
+                    timestamp: "2024-01-15T10:30:00Z"
+                    request_id: "req_123456789"
+
+    Conflict:
+      description: Conflict - resource state conflict
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: '#/components/schemas/Error'
+          examples:
+            duplicate_job:
+              summary: Duplicate job submission
+              value:
+                error:
+                  code: "DUPLICATE_JOB"
+                  message: "A job with this idempotency key has already been processed"
+                  details:
+                    idempotency_key: "123e4567-e89b-12d3-a456-426614174000"
+                    existing_job_id: "550e8400-e29b-41d4-a716-446655440000"
+                    timestamp: "2024-01-15T10:30:00Z"
+                    request_id: "req_123456789"
+
+    PayloadTooLarge:
+      description: Payload too large - exceeds size limits
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: '#/components/schemas/Error'
+          examples:
+            payload_too_large:
+              summary: Job payload exceeds size limit
+              value:
+                error:
+                  code: "PAYLOAD_TOO_LARGE"
+                  message: "Job payload size exceeds maximum allowed limit of 1MB"
+                  details:
+                    actual_size_mb: 2.5
+                    max_size_mb: 1.0
+                    timestamp: "2024-01-15T10:30:00Z"
+                    request_id: "req_123456789"
+
+    TooManyRequests:
+      description: Too many requests - rate limit exceeded
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: '#/components/schemas/Error'
+          examples:
+            rate_limit_exceeded:
+              summary: Rate limit exceeded
+              value:
+                error:
+                  code: "RATE_LIMIT_EXCEEDED"
+                  message: "You have exceeded the rate limit for this endpoint"
+                  details:
+                    limit: 100
+                    window: "minute"
+                    reset_time: "2024-01-15T10:31:00Z"
+                    timestamp: "2024-01-15T10:30:00Z"
+                    request_id: "req_123456789"
+
+    InternalServerError:
+      description: Internal server error - unexpected system error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: '#/components/schemas/Error'
+          examples:
+            internal_error:
+              summary: Internal server error
+              value:
+                error:
+                  code: "INTERNAL_ERROR"
+                  message: "An unexpected error occurred while processing your request"
+                  details:
+                    timestamp: "2024-01-15T10:30:00Z"
+                    request_id: "req_123456789"
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT Bearer token for authentication.
+
+        Obtain tokens from the Zama authentication service using OAuth 2.0 flow.
+
+        Token claims:
+        - sub: User identifier
+        - tenant_id: Tenant identifier
+        - scope: Requested permissions
+        - exp: Expiration timestamp
+        - iat: Issued timestamp
+
+tags:
+  - name: Jobs
+    description: Job submission and management operations
+  - name: Confidential Computing
+    description: FHE and privacy-preserving job operations
+  - name: System
+    description: System health and status operations
